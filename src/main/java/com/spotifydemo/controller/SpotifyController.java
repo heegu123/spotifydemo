@@ -23,6 +23,7 @@ import se.michaelthelin.spotify.model_objects.specification.Track;
 import se.michaelthelin.spotify.model_objects.specification.User;
 import se.michaelthelin.spotify.requests.authorization.authorization_code.AuthorizationCodeRequest;
 import se.michaelthelin.spotify.requests.authorization.authorization_code.AuthorizationCodeUriRequest;
+import se.michaelthelin.spotify.requests.authorization.authorization_code.pkce.AuthorizationCodePKCERequest;
 import se.michaelthelin.spotify.requests.data.library.GetCurrentUsersSavedAlbumsRequest;
 import se.michaelthelin.spotify.requests.data.personalization.simplified.GetUsersTopTracksRequest;
 import se.michaelthelin.spotify.requests.data.player.GetUsersAvailableDevicesRequest;
@@ -32,10 +33,10 @@ import se.michaelthelin.spotify.requests.data.users_profile.GetCurrentUsersProfi
 
 import java.io.IOException;
 import java.net.URI;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.List;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @RestController
@@ -44,16 +45,12 @@ import java.util.stream.Collectors;
 @CrossOrigin(origins = "http://localhost:3000")
 public class SpotifyController {
 
-    @Value("${custom.server.ip}")
-    private String customIp;
-
     private final SpotifyApiFactory spotifyApiFactory;
     private final UserProfileService userProfileService;
     private final SpotifyUserRepository spotifyUserRepository;
 
-    @GetMapping("login")
-    public String spotifyLogin() {
-        System.out.println("1. /login - Login START!");
+    @GetMapping("code")
+    public String getCode() {
         SpotifyApi spotifyApi = spotifyApiFactory.createSpotifyApi();
 
         List<String> scopes = new ArrayList<>();
@@ -70,128 +67,36 @@ public class SpotifyController {
                 .build();
 
         final URI uri = authorizationCodeUriRequest.execute();
-        System.out.println("2. /login - LOGIN FINISHED");
-        System.out.println("3. /login - uri: " + uri);
         return uri.toString();
     }
 
     @GetMapping(value = "get-user-code/")
-    public void getSpotifyUserCode(@RequestParam("code") String userCode, HttpServletResponse response)	throws IOException {
-        System.out.println("1. /get-user-code/ - GET_USER_CODE START!");
-        System.out.println("2. /get-user-code/ - userCode= "+ userCode);
+    public String getSpotifyUserCode(@RequestParam("code") String userCode, HttpServletResponse response)	throws IOException {
+        return userCode;
+    }
+
+    @GetMapping(value = "/accesstoken")
+    public String getAccessToken(@RequestParam("code") String userCode) {
+
         SpotifyApi spotifyApi = spotifyApiFactory.createSpotifyApi();
 
         AuthorizationCodeRequest authorizationCodeRequest = spotifyApi.authorizationCode(userCode).build();
-        User user = null;
-
         try {
             final AuthorizationCodeCredentials credentials = authorizationCodeRequest.execute();
 
             spotifyApi.setAccessToken(credentials.getAccessToken());
             spotifyApi.setRefreshToken(credentials.getRefreshToken());
 
-            final GetCurrentUsersProfileRequest getCurrentUsersProfile = spotifyApi.getCurrentUsersProfile().build();
-            user = getCurrentUsersProfile.execute();
+            String accessToken = credentials.getAccessToken();
+            String refreshToken = credentials.getRefreshToken();
 
-            userProfileService.insertOrUpdateSpotifyUser(user, credentials.getAccessToken(), credentials.getRefreshToken());
+            final GetCurrentUsersProfileRequest getCurrentUsersProfile = spotifyApi.getCurrentUsersProfile().build();
+
+            return "accesstoken: " + accessToken + "\nrefreshtoken: " + refreshToken;
+
         } catch (Exception e) {
             System.out.println("Exception occured while getting user code: " + e);
-        }
-        System.out.println("3. /get-user-code/ - userId= " + user.getId());
-        response.sendRedirect(customIp + "/home?id="+user.getId());
-    }
-
-    @GetMapping(value = "user-saved-album")
-    public SavedAlbum[] getCurrentUserSavedAlbum(@RequestParam String userId) {
-        SpotifyUser spotifyUser = spotifyUserRepository.findByRefId(userId);
-
-        SpotifyApi spotifyApi = spotifyApiFactory.createSpotifyApi();
-        spotifyApi.setAccessToken(spotifyUser.getAccessToken());
-        spotifyApi.setRefreshToken(spotifyUser.getRefreshToken());
-        System.out.println(spotifyUser.getAccessToken());
-        final GetCurrentUsersSavedAlbumsRequest getUsersTopArtistsRequest = spotifyApi.getCurrentUsersSavedAlbums()
-                .limit(50)
-                .offset(0)
-                .build();
-
-        try {
-            final Paging<SavedAlbum> artistPaging = getUsersTopArtistsRequest.execute();
-
-            return artistPaging.getItems();
-        } catch (Exception e) {
-            System.out.println("Exception occured while fetching user saved album: " + e);
-        }
-
-        return new SavedAlbum[0];
-    }
-
-    @GetMapping(value = "user-top-songs")
-    public Track[] getUserTopTracks(@RequestParam String userId) {
-        SpotifyUser spotifyUser = spotifyUserRepository.findByRefId(userId);
-
-        SpotifyApi spotifyApi = spotifyApiFactory.createSpotifyApi();
-        spotifyApi.setAccessToken(spotifyUser.getAccessToken());
-        spotifyApi.setRefreshToken(spotifyUser.getRefreshToken());
-
-        final GetUsersTopTracksRequest getUsersTopTracksRequest = spotifyApi.getUsersTopTracks()
-                .time_range("medium_term")
-                .limit(10)
-                .offset(0)
-                .build();
-
-        try {
-            final Paging<Track> trackPaging = getUsersTopTracksRequest.execute();
-
-            return trackPaging.getItems();
-        } catch (Exception e) {
-            System.out.println("Exception occured while fetching top songs: " + e);
-        }
-
-        return new Track[0];
-    }
-
-    @GetMapping("track")
-    public List<TrackDto> searchTrack(@RequestParam String q, @RequestParam String userId){
-        SpotifyUser spotifyUser = spotifyUserRepository.findByRefId(userId);
-
-        SpotifyApi spotifyApi = spotifyApiFactory.createSpotifyApi();
-        spotifyApi.setAccessToken(spotifyUser.getAccessToken());
-        spotifyApi.setRefreshToken(spotifyUser.getRefreshToken());
-
-        final SearchTracksRequest searchTracksRequest = spotifyApi.searchTracks(q)
-                .limit(10)
-                .offset(0)
-                .build();
-
-        try {
-            Paging<Track> trackPaging = searchTracksRequest.execute();
-
-            return Arrays.stream(trackPaging.getItems())
-                    .map(TrackDto::from)
-                    .collect(Collectors.toList());
-
-        } catch (IOException | SpotifyWebApiException | ParseException e) {
-            System.out.println("Error: " + e.getMessage());
-        }
-        return Collections.emptyList();
-    }
-
-    @PostMapping("/playback")
-    public void resumePlayback(@RequestParam String userId, String uri) {
-        SpotifyUser spotifyUser = spotifyUserRepository.findByRefId(userId);
-
-        SpotifyApi spotifyApi = spotifyApiFactory.createSpotifyApi();
-        spotifyApi.setAccessToken(spotifyUser.getAccessToken());
-        spotifyApi.setRefreshToken(spotifyUser.getRefreshToken());
-
-        StartResumeUsersPlaybackRequest startResumeUsersPlaybackRequest = spotifyApi.startResumeUsersPlayback()
-                .uris((JsonParser.parseString("[\"" + uri + "\"]").getAsJsonArray()))
-                .build();
-
-        try {
-            startResumeUsersPlaybackRequest.execute();
-        } catch (IOException | SpotifyWebApiException | ParseException e) {
-            System.out.println("Error: " + e.getMessage());
+            return null;
         }
     }
 }

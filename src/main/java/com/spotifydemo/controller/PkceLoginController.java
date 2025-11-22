@@ -32,7 +32,7 @@ public class PkceLoginController {
     }
 
     // 프론트한테 code 받아서 access token 발급
-    @PostMapping("/callback")
+    @PostMapping("/get-user-code/")
     public String getToken(@RequestParam String code,
                            @RequestParam String codeVerifier) {
 
